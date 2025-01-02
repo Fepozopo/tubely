@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
@@ -32,7 +33,8 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 	fmt.Println("uploading thumbnail for video", videoID, "by user", userID)
 
 	// Parse the form data
-	err = r.ParseMultipartForm(10 << 20) // 10 MB
+	const maxMemory = 10 << 20 // 10 MB
+	err = r.ParseMultipartForm(maxMemory)
 	if err != nil {
 		respondWithError(w, http.StatusBadRequest, "Error parsing form data", err)
 		return
@@ -48,14 +50,14 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 	// Get the media type from the file header
 	mediaType := r.Header.Get("Content-Type")
 
-	// Read the image data into a byte slice using io.ReadAll
-	imageData, err := io.ReadAll(r.Body)
+	// Read the image data into a byte slice
+	imageData, err := io.ReadAll(file)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Error reading image data", err)
 		return
 	}
 
-	// Get the video's metadata from the SQLite database using GetVideo
+	// Get the video's metadata from the SQLite database
 	video, err := cfg.db.GetVideo(videoID)
 	if err != nil {
 		respondWithError(w, http.StatusNotFound, "Couldn't get video", err)
@@ -67,15 +69,14 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Save the thumbnail to the global map
-	videoThumbnails[videoID] = thumbnail{
-		data:      imageData,
-		mediaType: mediaType,
-	}
+	// Convert the image data to a base64 string
+	imageBase64 := base64.StdEncoding.EncodeToString(imageData)
 
-	// Update the database with the new thumbnail URL using UpdateVideo
-	thumbnailURL := fmt.Sprintf("http://localhost:%s/api/thumbnails/%s", cfg.port, videoID)
-	video.ThumbnailURL = &thumbnailURL
+	// Update the video's ThumbnailURL with a data URL of the image
+	dataURL := fmt.Sprintf("data:%s;base64,%s", mediaType, imageBase64)
+	video.ThumbnailURL = &dataURL
+
+	// Update the database with the new thumbnail URL
 	err = cfg.db.UpdateVideo(video)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Error updating video in database", err)
