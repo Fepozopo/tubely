@@ -1,10 +1,11 @@
 package main
 
 import (
-	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
@@ -47,13 +48,33 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	defer file.Close()
-	// Get the media type from the file header
-	mediaType := r.Header.Get("Content-Type")
 
-	// Read the image data into a byte slice
-	imageData, err := io.ReadAll(file)
+	// Get the header from the file
+	header := make([]byte, 512)
+	_, err = file.Read(header)
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Error reading image data", err)
+		respondWithError(w, http.StatusInternalServerError, "Error reading file header", err)
+		return
+	}
+
+	// Reset the read position to the start of the file
+	_, err = file.Seek(0, io.SeekStart)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error resetting file read position", err)
+		return
+	}
+
+	mediaType := http.DetectContentType(header)
+
+	// Use the header to determine the file extension
+	var fileExtension string
+	switch mediaType {
+	case "image/jpeg":
+		fileExtension = ".jpg"
+	case "image/png":
+		fileExtension = ".png"
+	default:
+		respondWithError(w, http.StatusBadRequest, "Unsupported media type", nil)
 		return
 	}
 
@@ -69,12 +90,28 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Convert the image data to a base64 string
-	imageBase64 := base64.StdEncoding.EncodeToString(imageData)
+	// Create a unique file path using the videoID and file extension
+	fileName := fmt.Sprintf("%s%s", videoID, fileExtension)
+	filePath := filepath.Join(cfg.assetsRoot, fileName)
+
+	// Create the new file
+	localFile, err := os.Create(filePath)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error creating new file", err)
+		return
+	}
+	defer localFile.Close()
+
+	// Copy the image data to the new file
+	_, err = io.Copy(localFile, file)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error copying image data to new file", err)
+		return
+	}
 
 	// Update the video's ThumbnailURL with a data URL of the image
-	dataURL := fmt.Sprintf("data:%s;base64,%s", mediaType, imageBase64)
-	video.ThumbnailURL = &dataURL
+	thumbnailURL := fmt.Sprintf("http://localhost:%s/assets/%s", cfg.port, fileName)
+	video.ThumbnailURL = &thumbnailURL
 
 	// Update the database with the new thumbnail URL
 	err = cfg.db.UpdateVideo(video)
