@@ -49,7 +49,7 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 	}
 	defer file.Close()
 
-	// Get the header from the file
+	// Get the Content-Type header from the file
 	header := make([]byte, 512)
 	_, err = file.Read(header)
 	if err != nil {
@@ -66,7 +66,7 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 
 	mediaType := http.DetectContentType(header)
 
-	// Use the header to determine the file extension
+	// Use the Content-Type header to determine the file extension
 	var fileExtension string
 	switch mediaType {
 	case "image/jpeg":
