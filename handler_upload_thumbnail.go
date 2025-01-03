@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
@@ -90,8 +92,17 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Create a unique file path using the videoID and file extension
-	fileName := fmt.Sprintf("%s%s", videoID, fileExtension)
+	// Fill a 32-byte slice with random bytes and convert it into a random base64 string
+	randomBytes := make([]byte, 32)
+	_, err = rand.Read(randomBytes)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error generating random bytes", err)
+		return
+	}
+	randomString := base64.RawURLEncoding.EncodeToString(randomBytes)
+
+	// Create the file name and file path
+	fileName := fmt.Sprintf("%s%s", randomString, fileExtension)
 	filePath := filepath.Join(cfg.assetsRoot, fileName)
 
 	// Create the new file
@@ -109,7 +120,17 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Update the video's ThumbnailURL with a data URL of the image
+	// Delete the old thumbnail file if it exists
+	if video.ThumbnailURL != nil {
+		oldThumbnailPath := filepath.Join(cfg.assetsRoot, filepath.Base(*video.ThumbnailURL))
+		err = os.Remove(oldThumbnailPath)
+		if err != nil && !os.IsNotExist(err) {
+			respondWithError(w, http.StatusInternalServerError, "Error deleting old thumbnail file", err)
+			return
+		}
+	}
+
+	// Update the video's new ThumbnailURL
 	thumbnailURL := fmt.Sprintf("http://localhost:%s/assets/%s", cfg.port, fileName)
 	video.ThumbnailURL = &thumbnailURL
 
