@@ -81,8 +81,7 @@ func main() {
 	}
 
 	// Load the default AWS SDK config
-	ctx := context.Background()
-	sdkConfig, err := config.LoadDefaultConfig(ctx)
+	sdkConfig, err := config.LoadDefaultConfig(context.TODO())
 	if err != nil {
 		log.Fatal("Failed to load default AWS SDK config")
 	}
