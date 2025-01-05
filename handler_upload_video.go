@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
+	"os/exec"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -105,6 +107,22 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Get the aspect ratio of the video file
+	tmpLocalFilePath := tmpLocalFile.Name()
+	aspectRatio, err := getVideoAspectRatio(tmpLocalFilePath)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error getting aspect ratio of video file", err)
+	}
+	var videoOrientation string
+	switch aspectRatio {
+	case "16:9":
+		videoOrientation = "landscape"
+	case "9:16":
+		videoOrientation = "portrait"
+	default:
+		videoOrientation = "other"
+	}
+
 	// Reset the read position to the start of the temp file
 	_, err = tmpLocalFile.Seek(0, io.SeekStart)
 	if err != nil {
@@ -126,7 +144,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	fmt.Println("Uploading video to S3")
 	_, err = cfg.s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
 		Bucket:      aws.String(cfg.s3Bucket),
-		Key:         aws.String(fmt.Sprintf("%s.mp4", randomHex)),
+		Key:         aws.String(fmt.Sprintf("%s/%s.mp4", videoOrientation, randomHex)),
 		Body:        tmpLocalFile,
 		ContentType: aws.String("video/mp4"),
 	})
@@ -136,11 +154,22 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	}
 
 	// If the video already had a video URL, delete the old video in S3
-	fmt.Println("Deleting old video from S3")
 	if video.VideoURL != nil {
+		fmt.Println("Deleting old video from S3")
+		oldVideoURL := *video.VideoURL
+
+		// Extract everything after "amazonaws.com/"
+		splitURL := strings.SplitN(oldVideoURL, "amazonaws.com/", 2)
+		if len(splitURL) < 2 {
+			respondWithError(w, http.StatusInternalServerError, "Invalid video URL format", nil)
+			return
+		}
+		oldVideoKey := splitURL[1]
+
+		// Delete the old video
 		_, err = cfg.s3Client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
 			Bucket: aws.String(cfg.s3Bucket),
-			Key:    aws.String(filepath.Base(*video.VideoURL)),
+			Key:    aws.String(oldVideoKey),
 		})
 		if err != nil {
 			respondWithError(w, http.StatusInternalServerError, "Error deleting old video in S3", err)
@@ -149,7 +178,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Update the VideoURL of the video recorded in the database with the S3 bucket and key
-	videoURL := fmt.Sprintf("http://%s.s3.%s.amazonaws.com/%s.mp4", cfg.s3Bucket, cfg.s3Region, randomHex)
+	videoURL := fmt.Sprintf("http://%s.s3.%s.amazonaws.com/%s/%s.mp4", cfg.s3Bucket, cfg.s3Region, videoOrientation, randomHex)
 	video.VideoURL = &videoURL
 
 	// Update the database with the new video URL
@@ -160,5 +189,50 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Respond with updated JSON of the video's metadata
+	fmt.Println("Done!")
 	respondWithJSON(w, http.StatusOK, video)
+}
+
+// getVideoAspectRatio takes a file path and returns the aspect ratio as a string.
+// It uses the ffprobe command line tool to retrieve the video's aspect ratio.
+// The returned string is in the format "width:height".
+func getVideoAspectRatio(filePath string) (string, error) {
+	// Create a new command with the right arguments.
+	// The -v flag specifies the log level.
+	// The -print_format json flag specifies the output format.
+	// The -show_streams flag prints information about the file.
+	cmd := exec.Command("ffprobe", "-v", "error", "-print_format", "json", "-show_streams", filePath)
+
+	// Run the command and capture the output.
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		if _, ok := err.(*exec.ExitError); ok {
+			return "", fmt.Errorf("ffprobe failed: %s", string(output))
+		}
+		return "", fmt.Errorf("unexpected error running ffprobe: %v", err)
+	}
+
+	// Define a struct to unmarshal the JSON output into.
+	type Stream struct {
+		Width              int    `json:"width"`
+		Height             int    `json:"height"`
+		DisplayAspectRatio string `json:"display_aspect_ratio"`
+	}
+	type FFProbeOutput struct {
+		Streams []Stream `json:"streams"`
+	}
+
+	// Unmarshal the output into the struct.
+	var ffprobeOutput FFProbeOutput
+	err = json.Unmarshal(output, &ffprobeOutput)
+	if err != nil {
+		return "", fmt.Errorf("error unmarshaling ffprobe output: %v", err)
+	}
+
+	// Find the first video stream and get the aspect ratio.
+	for _, stream := range ffprobeOutput.Streams {
+		return stream.DisplayAspectRatio, nil
+	}
+
+	return "", fmt.Errorf("couldn't find video stream in ffprobe output")
 }
