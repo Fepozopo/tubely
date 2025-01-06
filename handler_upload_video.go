@@ -4,12 +4,10 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -108,8 +106,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Get the aspect ratio of the video file
-	tmpLocalFilePath := tmpLocalFile.Name()
-	aspectRatio, err := getVideoAspectRatio(tmpLocalFilePath)
+	aspectRatio, err := getVideoAspectRatio(tmpLocalFile.Name())
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Error getting aspect ratio of video file", err)
 	}
@@ -130,6 +127,22 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Create a processed version of the video for fast start
+	fastStartVideoLocation, err := processVideoForFastStart(tmpLocalFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error creating a processed version of the video", err)
+		return
+	}
+
+	// Open the processed video
+	fastStartVideoFile, err := os.Open(fastStartVideoLocation)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error opening processed video file", err)
+		return
+	}
+	defer os.Remove(fastStartVideoLocation) // clean up
+	defer fastStartVideoFile.Close()
+
 	// Fill a 32-byte slice with random bytes
 	randomBytes := make([]byte, 32)
 	_, err = rand.Read(randomBytes)
@@ -145,7 +158,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	_, err = cfg.s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
 		Bucket:      aws.String(cfg.s3Bucket),
 		Key:         aws.String(fmt.Sprintf("%s/%s.mp4", videoOrientation, randomHex)),
-		Body:        tmpLocalFile,
+		Body:        fastStartVideoFile,
 		ContentType: aws.String("video/mp4"),
 	})
 	if err != nil {
@@ -191,48 +204,4 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	// Respond with updated JSON of the video's metadata
 	fmt.Println("Done!")
 	respondWithJSON(w, http.StatusOK, video)
-}
-
-// getVideoAspectRatio takes a file path and returns the aspect ratio as a string.
-// It uses the ffprobe command line tool to retrieve the video's aspect ratio.
-// The returned string is in the format "width:height".
-func getVideoAspectRatio(filePath string) (string, error) {
-	// Create a new command with the right arguments.
-	// The -v flag specifies the log level.
-	// The -print_format json flag specifies the output format.
-	// The -show_streams flag prints information about the file.
-	cmd := exec.Command("ffprobe", "-v", "error", "-print_format", "json", "-show_streams", filePath)
-
-	// Run the command and capture the output.
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		if _, ok := err.(*exec.ExitError); ok {
-			return "", fmt.Errorf("ffprobe failed: %s", string(output))
-		}
-		return "", fmt.Errorf("unexpected error running ffprobe: %v", err)
-	}
-
-	// Define a struct to unmarshal the JSON output into.
-	type Stream struct {
-		Width              int    `json:"width"`
-		Height             int    `json:"height"`
-		DisplayAspectRatio string `json:"display_aspect_ratio"`
-	}
-	type FFProbeOutput struct {
-		Streams []Stream `json:"streams"`
-	}
-
-	// Unmarshal the output into the struct.
-	var ffprobeOutput FFProbeOutput
-	err = json.Unmarshal(output, &ffprobeOutput)
-	if err != nil {
-		return "", fmt.Errorf("error unmarshaling ffprobe output: %v", err)
-	}
-
-	// Find the first video stream and get the aspect ratio.
-	for _, stream := range ffprobeOutput.Streams {
-		return stream.DisplayAspectRatio, nil
-	}
-
-	return "", fmt.Errorf("couldn't find video stream in ffprobe output")
 }
