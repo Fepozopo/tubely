@@ -171,8 +171,9 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		fmt.Println("Deleting old video from S3")
 		oldVideoURL := *video.VideoURL
 
-		// Extract everything after "amazonaws.com/"
-		splitURL := strings.SplitN(oldVideoURL, "amazonaws.com/", 2)
+		// The url is in this format "bucket,key"
+		// Extract everything after the "bucket"
+		splitURL := strings.SplitN(oldVideoURL, ",", 2)
 		if len(splitURL) < 2 {
 			respondWithError(w, http.StatusInternalServerError, "Invalid video URL format", nil)
 			return
@@ -191,7 +192,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Update the VideoURL of the video recorded in the database with the S3 bucket and key
-	videoURL := fmt.Sprintf("http://%s.s3.%s.amazonaws.com/%s/%s.mp4", cfg.s3Bucket, cfg.s3Region, videoOrientation, randomHex)
+	videoURL := fmt.Sprintf("%s,%s/%s.mp4", cfg.s3Bucket, videoOrientation, randomHex)
 	video.VideoURL = &videoURL
 
 	// Update the database with the new video URL
