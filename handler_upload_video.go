@@ -191,7 +191,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	// Update the VideoURL of the video recorded in the database with the S3 bucket and key
+	// Update the VideoURL with the S3 bucket and key
 	videoURL := fmt.Sprintf("%s,%s/%s.mp4", cfg.s3Bucket, videoOrientation, randomHex)
 	video.VideoURL = &videoURL
 
@@ -202,7 +202,13 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	signedVideo, err := cfg.dbVideoToSignedVideo(video)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error getting signed video", err)
+		return
+	}
+
 	// Respond with updated JSON of the video's metadata
 	fmt.Println("Done!")
-	respondWithJSON(w, http.StatusOK, video)
+	respondWithJSON(w, http.StatusOK, signedVideo)
 }
