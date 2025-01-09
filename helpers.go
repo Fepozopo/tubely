@@ -1,15 +1,9 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
-	"strings"
-	"time"
-
-	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/database"
 )
 
 // getVideoAspectRatio takes a file path and returns the aspect ratio as a string.
@@ -77,48 +71,4 @@ func processVideoForFastStart(filePath string) (string, error) {
 	}
 
 	return outputFilePath, nil
-}
-
-func generatePresignedURL(s3Client *s3.Client, bucket, key string, expireTime time.Duration) (string, error) {
-	presignClient := s3.NewPresignClient(s3Client)
-
-	presignParams := &s3.GetObjectInput{
-		Bucket: &bucket,
-		Key:    &key,
-	}
-
-	req, err := presignClient.PresignGetObject(context.TODO(), presignParams, s3.WithPresignExpires(expireTime))
-	if err != nil {
-		return "", fmt.Errorf("error generating presigned URL: %v", err)
-	}
-
-	return req.URL, nil
-}
-
-func (cfg *apiConfig) dbVideoToSignedVideo(video database.Video) (database.Video, error) {
-	// If the video has a URL
-	if video.VideoURL != nil {
-		// Split the video url on the comma
-		// The url is in this format "bucket,key"
-		videoURL := video.VideoURL
-		splitURL := strings.SplitN(*videoURL, ",", 2)
-		if len(splitURL) < 2 {
-			return video, fmt.Errorf("invalid video URL format")
-		}
-		videoBucket := splitURL[0]
-		videoKey := splitURL[1]
-
-		var expireTime time.Duration = 1 * time.Hour
-
-		presignedURL, err := generatePresignedURL(cfg.s3Client, videoBucket, videoKey, expireTime)
-		if err != nil {
-			return video, fmt.Errorf("unable to generate presigned URL: %v", err)
-		}
-
-		video.VideoURL = &presignedURL
-
-		return video, nil
-	}
-
-	return video, nil
 }
